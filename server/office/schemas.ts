@@ -4,6 +4,8 @@ import { z } from "zod";
 // 지켜야 해서 z.strictObject와 nullable만 쓴다. optional은 쓰지 않는다.
 
 export const BriefSchema = z.strictObject({
+  readable: z.boolean().describe("질문을 온전히 읽고 이해했으면 true. 글자가 깨졌거나 무엇을 묻는지 알 수 없으면 false"),
+  unreadableReason: z.string().nullable().describe("readable=false일 때 무엇이 문제인지. 아니면 null"),
   refinedQuestion: z.string().describe("연구할 질문을 한 문장으로 다듬은 것"),
   framing: z.string().describe("왜 중요한지, 어디까지 다룰지"),
   assignments: z.array(
@@ -112,6 +114,8 @@ export function jsonSchemaOf(schema: z.ZodType): object {
 // ── 서버 검증: 스키마가 잡지 못하는 참조 무결성 ───────────────────────
 
 export function validateBrief(brief: Brief, researcherIds: string[]): string[] {
+  // 읽을 수 없다는 판단은 고쳐 받을 대상이 아니라 멈출 사유다(오케스트레이터가 처리)
+  if (brief.readable === false) return [];
   const errors: string[] = [];
   const assigned = brief.assignments.map((a) => a.researcherId);
   for (const id of assigned) if (!researcherIds.includes(id)) errors.push(`없는 리서처: ${id}`);

@@ -24,8 +24,16 @@ export type StudyStatus = "running" | "paused" | "waiting_limit" | "failed" | "c
 export type TurnRowStatus = "running" | "succeeded" | "failed" | "cancelled" | "rate_limited" | "interrupted" | "invalid";
 export type AskStatus = "pending" | "leased" | "answered" | "failed";
 
+export interface ThinkTankRow {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
 export interface StudyRow {
   id: string;
+  thinktank_id: string | null;
   question: string;
   hypothesis: string | null;
   status: StudyStatus;
@@ -33,8 +41,20 @@ export interface StudyRow {
   error: string | null;
   lock_pid: number | null;
   report_path: string | null;
+  /** 사후 검토: 보고서를 읽은 사용자가 쓴 "가설과 무엇이 달랐나" */
+  reflection: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface EventRow {
+  id: number;
+  study_id: string;
+  turn_id: string | null;
+  employee_id: string | null;
+  kind: string;
+  payload: string;
+  at: string;
 }
 
 export interface SessionRow {
@@ -60,6 +80,12 @@ export interface AskRow {
 }
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS thinktanks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS studies (
   id TEXT PRIMARY KEY,
   question TEXT NOT NULL,
@@ -164,6 +190,9 @@ export class Store {
   private migrate(): void {
     const cols = (this.db.prepare("PRAGMA table_info(asks)").all() as { name: string }[]).map((c) => c.name);
     if (!cols.includes("lease_token")) this.db.exec("ALTER TABLE asks ADD COLUMN lease_token TEXT");
+    const studyCols = (this.db.prepare("PRAGMA table_info(studies)").all() as { name: string }[]).map((c) => c.name);
+    if (!studyCols.includes("thinktank_id")) this.db.exec("ALTER TABLE studies ADD COLUMN thinktank_id TEXT");
+    if (!studyCols.includes("reflection")) this.db.exec("ALTER TABLE studies ADD COLUMN reflection TEXT");
   }
 
   close(): void {
@@ -183,20 +212,39 @@ export class Store {
     }
   }
 
+  // ── thinktanks ────────────────────────────────────────────
+
+  createThinkTank(name: string, description: string): ThinkTankRow {
+    const id = randomUUID().slice(0, 8);
+    this.db
+      .prepare("INSERT INTO thinktanks (id, name, description, created_at) VALUES (?, ?, ?, ?)")
+      .run(id, name, description, now());
+    return this.getThinkTank(id)!;
+  }
+
+  getThinkTank(id: string): ThinkTankRow | undefined {
+    return this.db.prepare("SELECT * FROM thinktanks WHERE id = ?").get(id) as ThinkTankRow | undefined;
+  }
+
+  listThinkTanks(): ThinkTankRow[] {
+    return this.db.prepare("SELECT * FROM thinktanks ORDER BY created_at").all() as unknown as ThinkTankRow[];
+  }
+
   // ── studies ───────────────────────────────────────────────
 
   createStudy(input: {
     question: string;
     hypothesis: string | null;
+    thinktankId?: string | null;
     employees: { id: string; role: string; engine: string }[];
   }): StudyRow {
     const id = `${now().slice(0, 10).replaceAll("-", "")}-${randomUUID().slice(0, 8)}`;
     this.tx(() => {
       this.db
         .prepare(
-          "INSERT INTO studies (id, question, hypothesis, status, stage, created_at, updated_at) VALUES (?, ?, ?, 'paused', 'frame', ?, ?)",
+          "INSERT INTO studies (id, thinktank_id, question, hypothesis, status, stage, created_at, updated_at) VALUES (?, ?, ?, ?, 'paused', 'frame', ?, ?)",
         )
-        .run(id, input.question, input.hypothesis, now(), now());
+        .run(id, input.thinktankId ?? null, input.question, input.hypothesis, now(), now());
       const insert = this.db.prepare(
         "INSERT INTO study_employees (study_id, employee_id, role, engine) VALUES (?, ?, ?, ?)",
       );
@@ -209,8 +257,19 @@ export class Store {
     return this.db.prepare("SELECT * FROM studies WHERE id = ?").get(id) as StudyRow | undefined;
   }
 
-  listStudies(): StudyRow[] {
-    return this.db.prepare("SELECT * FROM studies ORDER BY created_at DESC").all() as unknown as StudyRow[];
+  listStudies(thinktankId?: string | null): StudyRow[] {
+    if (thinktankId === undefined) {
+      return this.db.prepare("SELECT * FROM studies ORDER BY created_at DESC").all() as unknown as StudyRow[];
+    }
+    return (
+      thinktankId === null
+        ? this.db.prepare("SELECT * FROM studies WHERE thinktank_id IS NULL ORDER BY created_at DESC").all()
+        : this.db.prepare("SELECT * FROM studies WHERE thinktank_id = ? ORDER BY created_at DESC").all(thinktankId)
+    ) as unknown as StudyRow[];
+  }
+
+  setReflection(id: string, reflection: string): void {
+    this.db.prepare("UPDATE studies SET reflection = ?, updated_at = ? WHERE id = ?").run(reflection, now(), id);
   }
 
   updateStudy(id: string, patch: Partial<Pick<StudyRow, "status" | "stage" | "error" | "report_path">>): void {
@@ -328,7 +387,19 @@ export class Store {
     return Number(r.lastInsertRowid);
   }
 
+  eventsAfter(studyId: string, afterId: number, limit = 5000): EventRow[] {
+    return this.db
+      .prepare("SELECT * FROM events WHERE study_id = ? AND id > ? ORDER BY id LIMIT ?")
+      .all(studyId, afterId, limit) as unknown as EventRow[];
+  }
+
   // ── artifacts ─────────────────────────────────────────────
+
+  listArtifacts(studyId: string): { key: string; employee_id: string | null; created_at: string }[] {
+    return this.db
+      .prepare("SELECT key, employee_id, created_at FROM artifacts WHERE study_id = ? ORDER BY created_at")
+      .all(studyId) as unknown as { key: string; employee_id: string | null; created_at: string }[];
+  }
 
   getArtifact<T>(studyId: string, key: string): T | undefined {
     const row = this.db
@@ -343,6 +414,10 @@ export class Store {
       this.putArtifact(studyId, key, employeeId, content);
       this.finishTurn(turnId, { status: "succeeded", sessionId, error: null, exitCode: 0 });
     });
+  }
+
+  deleteArtifact(studyId: string, key: string): void {
+    this.db.prepare("DELETE FROM artifacts WHERE study_id = ? AND key = ?").run(studyId, key);
   }
 
   /** 같은 key는 덮어쓴다(수정본). 키가 단계의 체크포인트 역할을 한다. */

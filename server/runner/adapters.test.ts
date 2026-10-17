@@ -88,7 +88,7 @@ test("codex: 이벤트 정규화와 최종 출력", () => {
     { kind: "session", sessionId: "th1" },
     { kind: "tool_call", tool: "web_search", detail: "q1" },
     { kind: "tool_call", tool: "web_open", detail: "https://a" },
-    { kind: "tool_call", tool: "office/ask_colleague", detail: "왜?" },
+    { kind: "tool_call", tool: "office/ask_colleague", detail: "왜?", target: "b" },
     { kind: "tool_result", tool: "office/ask_colleague", ok: true },
     { kind: "message", text: '{"a":1}' },
     { kind: "usage", inputTokens: 10, cachedInputTokens: 8, outputTokens: 1 },

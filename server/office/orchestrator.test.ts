@@ -21,6 +21,8 @@ after(() => {
 });
 
 const BRIEF: Brief = {
+  readable: true,
+  unreadableReason: null,
   refinedQuestion: "다듬은 질문",
   framing: "범위",
   assignments: [
@@ -143,6 +145,23 @@ test("전체 흐름: 소장 → 리서치 → 레드팀 2단계 → 편집 → �
   assert.equal(red[1]!.spec.resumeSessionId, store.getSession(study.id, "redteam")!.session_id);
   // 레드팀 1단계에는 리서처의 주장 문장이 들어가지 않는다(원자료 먼저)
   assert.ok(!red[0]!.spec.prompt.includes("Q1 주장"));
+  store.close();
+});
+
+test("소장이 질문을 읽을 수 없다고 하면 추측해서 진행하지 않고 멈춘다", async () => {
+  const { runner, calls } = fakeRunner({
+    override: (step) =>
+      step === "frame"
+        ? { output: { ...BRIEF, readable: false, unreadableReason: "글자가 깨져 있다", assignments: [], refinedQuestion: "", framing: "" } }
+        : undefined,
+  });
+  const { store, orch } = setup("unreadable", runner);
+  const study = orch.createStudy("\uFFFD\uFFFD AI \uFFFD?", null);
+  const result = await orch.run(study.id);
+  assert.equal(result.status, "failed");
+  assert.match(result.error!, /글자가 깨져 있다/);
+  assert.equal(calls.length, 1, "리서치로 넘어가지 않는다");
+  assert.equal(store.getArtifact(study.id, "brief"), undefined);
   store.close();
 });
 

@@ -81,7 +81,13 @@ export const codexAdapter: EngineAdapter = {
         out.push({ kind: "session", sessionId: e.thread_id });
       } else if (e.type === "item.started" && item?.type === "mcp_tool_call") {
         const arg = item.arguments?.question ?? item.arguments?.to;
-        out.push({ kind: "tool_call", tool: `${item.server}/${item.tool}`, detail: typeof arg === "string" ? arg : "" });
+        const target = item.arguments?.to;
+        out.push({
+          kind: "tool_call",
+          tool: `${item.server}/${item.tool}`,
+          detail: typeof arg === "string" ? arg : "",
+          ...(typeof target === "string" ? { target } : {}),
+        });
       } else if (e.type === "item.completed" && item) {
         switch (item.type) {
           case "agent_message":

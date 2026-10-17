@@ -132,7 +132,7 @@ export function renderReport(input: {
     "",
     "> 직접 채울 칸: 가설과 무엇이 달랐나? 무엇이 걸렸고, 무엇을 받아들이지 않겠는가?",
     "",
-    "-",
+    study.reflection?.trim() ? study.reflection.trim() : "-",
     "",
   );
   return lines.join("\n");

@@ -8,9 +8,11 @@
     "node": ">=22"
   },
   "scripts": {
+    "office": "tsx server/cli/office.ts",
+    "build:web": "vite build web",
     "study": "tsx server/cli/study.ts",
-    "test": "tsx --test \"server/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"server/**/*.test.ts\" \"web/src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "spike:probe": "tsx spikes/m0/probe.ts",
     "spike:roundtrip": "tsx spikes/m0/roundtrip.ts",
     "spike:isolation": "tsx spikes/m0/isolation.ts",
@@ -18,11 +20,20 @@
   },
   "devDependencies": {
     "@types/node": "22.20.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "playwright-core": "1.63.0",
     "tsx": "4.23.15",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vite": "8.3.2"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.31.0",
+    "dompurify": "3.4.16",
+    "marked": "18.0.14",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "zod": "4.6.5"
   }
 }

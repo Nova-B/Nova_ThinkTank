@@ -3,7 +3,8 @@ export type Engine = "claude" | "codex";
 /** 화면·로그·DB가 공통으로 쓰는 이벤트. 엔진별 원본 이벤트는 어댑터가 이 모양으로 바꾼다. */
 export type NormalizedEvent =
   | { kind: "session"; sessionId: string }
-  | { kind: "tool_call"; tool: string; detail: string }
+  /** target: 동료에게 묻는 도구일 때 상대 직원 ID. 사무실 화면이 그 자리로 걸어가게 그린다 */
+  | { kind: "tool_call"; tool: string; detail: string; target?: string }
   | { kind: "tool_result"; tool: string; ok: boolean; detail?: string }
   | { kind: "message"; text: string }
   | {

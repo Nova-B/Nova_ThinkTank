@@ -64,7 +64,13 @@ export const claudeAdapter: EngineAdapter = {
             if (block.id) toolNames.set(block.id, block.name);
             // 구조화 출력은 도구 호출 모양으로 오지만 최종 출력이므로 도구로 세지 않는다
             if (block.name !== "StructuredOutput") {
-              out.push({ kind: "tool_call", tool: block.name, detail: toolDetail(block.name, block.input) });
+              const target = typeof block.input?.to === "string" ? block.input.to : undefined;
+              out.push({
+                kind: "tool_call",
+                tool: block.name,
+                detail: toolDetail(block.name, block.input),
+                ...(target ? { target } : {}),
+              });
             }
           } else if (block.type === "tool_result" && block.tool_use_id) {
             const tool = toolNames.get(block.tool_use_id) ?? "unknown";
