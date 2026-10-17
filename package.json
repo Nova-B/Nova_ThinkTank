@@ -1,0 +1,25 @@
+{
+  "name": "nova-thinktank",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI 직원들이 싱크탱크처럼 일하는 로컬 연구 사무실",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "spike:probe": "tsx spikes/m0/probe.ts",
+    "spike:roundtrip": "tsx spikes/m0/roundtrip.ts",
+    "spike:isolation": "tsx spikes/m0/isolation.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "zod": "4.6.5"
+  }
+}
