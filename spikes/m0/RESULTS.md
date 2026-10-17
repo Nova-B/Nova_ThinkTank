@@ -28,6 +28,12 @@ Windows 11, Node 22.17.0, **Claude Code 2.1.302** (`--model haiku`), **codex-cli
 | 17 | Codex 읽기 전용 | ⚠️ 파일은 생기지 않았다. 하지만 이벤트에 `command_execution`이 없고 모델이 "정책상 차단"이라고 말만 했다 | **OS 샌드박스가 실제 쓰기를 막았는지는 미검증.** M1a에서 명령을 실제로 실행시키는 시험을 다시 한다 |
 | 18 | 턴 도중 트리 종료 (`taskkill /T /F`) | ✅ 종료 코드 1, 종료 1.5초 뒤 `office-mcp.ts` node 프로세스 0개, `--resume`으로 앞 요청을 기억 | 턴 실행 중에 MCP 프로세스가 떠 있었는지는 세지 않아 **자식 정리 보장은 미검증**. 요청을 기억하는 것과 중단된 작업을 안전하게 복구하는 것도 별개다 |
 
+| 19 | Claude 구조화 출력 `--json-schema` | ✅ `StructuredOutput` 도구 호출로 처리, `result.structured_output`에 객체가 들어온다 (`result.result`는 같은 내용의 JSON 문자열) | 산출물은 `structured_output`에서 읽는다 |
+| 20 | Codex 구조화 출력 `--output-schema <파일>` | ✅ 마지막 `agent_message.text`가 스키마에 맞는 JSON 문자열 | 마지막 메시지를 JSON 파싱 후 서버에서 다시 검증 |
+| 21 | Codex 위험 기능 끄기 | ✅ `--disable shell_tool unified_exec apps browser_use browser_use_external computer_use in_app_browser image_generation multi_agent plugins hooks skill_search` 상태에서 정상 동작. 셸을 쓰라고 해도 "셸 실행 도구가 없다"고 답함 | 기본값으로 셸·브라우저·컴퓨터 사용이 **켜져 있으므로** 직원에게는 반드시 끈다. #17의 샌드박스 미검증 문제를 도구 단에서 우회 |
+
+(#19~#21은 `npx tsx spikes/m0/structured.ts`)
+
 검증 범위: #5는 한도 정보가 **보인다**는 것까지만 확인했다(한도 소진 후 대기·재개는 미검증). #9·#10은 **순차 실행**에서의 왕복이다. 동시에 여러 요청이 큐에 쓰일 때는 시험하지 않았고, 스파이크의 JSON 파일 큐는 동시 쓰기에서 요청을 잃을 수 있다.
 
 참고: 같은 질문("가장 최근 IEA 보고서")에 Claude와 Codex가 **서로 다른 보고서**를 찾았다. 둘을 섞으면 검색 결과가 실제로 다양해질 수 있다는 단서다. 다만 이것만으로 판단이 독립적이라고 볼 수는 없다.

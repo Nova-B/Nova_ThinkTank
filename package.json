@@ -8,10 +8,13 @@
     "node": ">=22"
   },
   "scripts": {
+    "study": "tsx server/cli/study.ts",
+    "test": "tsx --test \"server/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "spike:probe": "tsx spikes/m0/probe.ts",
     "spike:roundtrip": "tsx spikes/m0/roundtrip.ts",
-    "spike:isolation": "tsx spikes/m0/isolation.ts"
+    "spike:isolation": "tsx spikes/m0/isolation.ts",
+    "spike:structured": "tsx spikes/m0/structured.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.4",
