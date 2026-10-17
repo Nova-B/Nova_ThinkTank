@@ -39,6 +39,9 @@ export interface FeedItem {
 export interface OfficeState {
   lastEventId: number;
   stage: string | null;
+  /** 단계가 바뀐 시각과 직전 단계. 회의 테이블로 모이고 흩어지는 움직임에 쓴다 */
+  stageAt: number;
+  prevStage: string | null;
   employees: Record<string, EmployeeState>;
   walks: Walk[];
   feed: FeedItem[];
@@ -54,6 +57,8 @@ export const STEP_LABEL: Record<string, string> = {
   revise: "메모를 고치는 중",
   "redteam:sources": "출처를 따져 보는 중",
   "redteam:critique": "반론을 쓰는 중",
+  rebuttal: "재반박을 쓰는 중",
+  counter: "재반박에 답하는 중",
   edit: "보고서를 쓰는 중",
 };
 
@@ -63,6 +68,7 @@ export const STAGE_LABEL: Record<string, string> = {
   asks: "동료 질문",
   revise: "메모 수정",
   redteam: "레드팀",
+  rebuttal: "재반박",
   edit: "편집",
   render: "보고서",
   done: "완료",
@@ -75,6 +81,8 @@ const STEP_NOUN: Record<string, string> = {
   revise: "메모 수정",
   "redteam:sources": "출처 평가",
   "redteam:critique": "반론 작성",
+  rebuttal: "재반박 작성",
+  counter: "레드팀 마지막 답",
   edit: "보고서 작성",
 };
 
@@ -99,7 +107,7 @@ export function initialState(roster: Employee[]): OfficeState {
   for (const e of roster) {
     employees[e.id] = { id: e.id, status: "idle", step: null, activity: null, toolCalls: 0, turns: 0, lastError: null };
   }
-  return { lastEventId: 0, stage: null, employees, walks: [], feed: [], rate: null };
+  return { lastEventId: 0, stage: null, stageAt: 0, prevStage: null, employees, walks: [], feed: [], rate: null };
 }
 
 export function reduce(state: OfficeState, msg: EventMessage, now = Date.now()): OfficeState {
@@ -120,7 +128,9 @@ export function reduce(state: OfficeState, msg: EventMessage, now = Date.now()):
 
   switch (ev.kind) {
     case "stage":
+      next.prevStage = state.stage;
       next.stage = ev.stage;
+      next.stageAt = at;
       feed("stage", STAGE_LABEL[ev.stage] ?? ev.stage);
       break;
     case "turn_started":

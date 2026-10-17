@@ -11,20 +11,26 @@ import { byRole, researchers, type Employee } from "./roster.js";
 import {
   AskAnswerSchema,
   BriefSchema,
+  CounterSchema,
   CritiqueSchema,
+  RebuttalSchema,
   jsonSchemaOf,
   ReportDraftSchema,
   ResearchMemoSchema,
   SourceReviewSchema,
   validateBrief,
+  validateCounter,
   validateCritique,
+  validateRebuttal,
   validateMemo,
   validateReport,
   validateSourceReview,
   type AskAnswer,
   type Brief,
   type Claim,
+  type Counter,
   type Critique,
+  type Rebuttal,
   type ReportDraft,
   type ResearchMemo,
   type SourceReview,
@@ -130,7 +136,38 @@ interface StoredMemo {
   openQuestions: string[];
 }
 
-type TurnKind = "frame" | "research" | "answer" | "revise" | "redteam" | "edit";
+type TurnKind = "frame" | "research" | "answer" | "revise" | "redteam" | "rebuttal" | "edit";
+
+/** 리서처 → 그가 답할 반론 번호들. 반론이 겨냥한 주장을 쓴 사람이 답한다 */
+export function assignRebuttals(critique: Critique, owners: Map<string, string>): Map<string, number[]> {
+  const byResearcher = new Map<string, number[]>();
+  const everyone = [...new Set(owners.values())];
+  critique.challenges.forEach((c, i) => {
+    const targeted = [...new Set(c.claimIds.map((id) => owners.get(id)).filter((x): x is string => Boolean(x)))];
+    // 특정 주장을 겨냥하지 않은(연구 전체를 겨냥한) 반론은 리서처 모두가 답한다
+    for (const who of targeted.length ? targeted : everyone) {
+      byResearcher.set(who, [...(byResearcher.get(who) ?? []), i + 1]);
+    }
+  });
+  return byResearcher;
+}
+
+/**
+ * 2라운드 대상: 심각도 high이고 결론을 바꿀 수 있는데, 리서처가 수용하지 않은(부분 수용·거부) 반론.
+ * 연구들은 반론-재반박의 효과가 1~2라운드에서 대부분 나오고, 라운드를 늘리면 비용만 늘거나
+ * 오히려 서로 휩쓸린다고 본다 → 핵심만 한 번 더, 그것이 마지막이다.
+ */
+export function counterEligible(critique: Critique, rebuttals: Rebuttal[]): number[] {
+  return critique.challenges
+    .map((c, i) => ({ c, no: i + 1 }))
+    .filter(
+      ({ c, no }) =>
+        c.severity === "high" &&
+        c.wouldChangeConclusion &&
+        rebuttals.some((r) => r.responses.some((x) => x.challengeNo === no && x.stance !== "accept")),
+    )
+    .map(({ no }) => no);
+}
 
 interface StepSpec<S extends z.ZodType, A> {
   employee: Employee;
@@ -143,6 +180,8 @@ interface StepSpec<S extends z.ZodType, A> {
   toArtifact: (value: z.infer<S>) => A;
   webSearch: boolean;
   messenger?: boolean;
+  /** 저장된 산출물이 지금 파이프라인의 형식인지. 아니면(예전 버전) 지우고 다시 만든다 */
+  isCurrent?: (artifact: A) => boolean;
 }
 
 export class Orchestrator {
@@ -287,6 +326,51 @@ export class Orchestrator {
       webSearch: true,
     });
 
+    // ── 재반박: 반론이 겨냥한 주장의 주인이 답한다 (1라운드) ──
+    this.stage(study.id, "rebuttal");
+    const owners = new Map(staff.flatMap((r, i) => memos[i]!.claims.map((c) => [c.id, r.id] as const)));
+    const assigned = assignRebuttals(critique, owners);
+    await settleAll(
+      staff
+        .filter((r) => assigned.has(r.id))
+        .map((r) =>
+          this.step<typeof RebuttalSchema, Rebuttal>(study, {
+            employee: r,
+            stepKey: `rebuttal:${r.id}`,
+            artifactKey: `rebuttal:${r.id}`,
+            kind: "rebuttal",
+            prompt: P.rebuttalPrompt(memos[staff.indexOf(r)]!.claims, claims, critique, assigned.get(r.id)!),
+            schema: RebuttalSchema,
+            validate: (v) => validateRebuttal(v, assigned.get(r.id)!),
+            toArtifact: (v) => v,
+            webSearch: true,
+          }),
+        ),
+    );
+    const rebuttals = staff
+      .filter((r) => assigned.has(r.id))
+      .map((r) => ({ who: r.label, rebuttal: store.getArtifact<Rebuttal>(study.id, `rebuttal:${r.id}`)! }));
+
+    // ── 조건부 2라운드: 핵심 반론에 리서처가 버텼을 때만 레드팀이 마지막으로 답한다 ──
+    const eligible = counterEligible(critique, rebuttals.map((x) => x.rebuttal));
+    let counter: Counter;
+    if (eligible.length) {
+      counter = await this.step<typeof CounterSchema, Counter>(study, {
+        employee: redteam,
+        stepKey: "counter",
+        artifactKey: "counter",
+        kind: "redteam",
+        prompt: P.counterPrompt(critique, eligible, rebuttals),
+        schema: CounterSchema,
+        validate: (v) => validateCounter(v, eligible),
+        toArtifact: (v) => v,
+        webSearch: true,
+      });
+    } else {
+      counter = store.getArtifact<Counter>(study.id, "counter") ?? { replies: [] };
+      store.putArtifact(study.id, "counter", null, counter);
+    }
+
     this.stage(study.id, "edit");
     await this.step<typeof ReportDraftSchema, ReportDraft>(study, {
       employee: editor,
@@ -301,10 +385,14 @@ export class Orchestrator {
         openQuestions: memos.flatMap((m) => m.openQuestions),
         review,
         critique,
+        rebuttals,
+        counter,
       }),
       schema: ReportDraftSchema,
       validate: (d) => validateReport(d, claimIds, critique),
       toArtifact: (v) => v,
+      // M1a 초안(accepted: boolean)은 재반박을 보지 않고 쓴 것이다
+      isCurrent: (d) => d.redteamResponses.every((r) => "verdict" in r),
       webSearch: false,
     });
 
@@ -335,6 +423,11 @@ export class Orchestrator {
       critique: get<Critique>("redteam-critique"),
       draft: get<ReportDraft>("report-draft"),
       researcherQuestions: staff.flatMap((r, i) => memos[i]!.openQuestions.map((q) => ({ who: r.label, question: q }))),
+      rebuttals: staff.flatMap((r) => {
+        const rebuttal = store.getArtifact<Rebuttal>(studyId, `rebuttal:${r.id}`);
+        return rebuttal ? [{ who: r.label, rebuttal }] : [];
+      }),
+      counter: store.getArtifact<Counter>(studyId, "counter") ?? null,
     });
     const dir = path.join(this.deps.dataDir, "studies", studyId);
     mkdirSync(dir, { recursive: true });
@@ -446,7 +539,12 @@ export class Orchestrator {
   private async step<S extends z.ZodType, A>(study: StudyRow, s: StepSpec<S, A>): Promise<A> {
     const { store } = this.deps;
     const done = store.getArtifact<A>(study.id, s.artifactKey);
-    if (done !== undefined) return done;
+    if (done !== undefined) {
+      if (!s.isCurrent || s.isCurrent(done)) return done;
+      // 예전 형식의 체크포인트를 그대로 쓰면 새 단계(재반박 등)의 결과를 무시하게 된다
+      store.deleteArtifact(study.id, s.artifactKey);
+      this.emit(study.id, null, s.employee, { kind: "error", message: `예전 형식의 ${s.artifactKey}를 버리고 다시 만든다` });
+    }
 
     const jsonSchema = jsonSchemaOf(s.schema);
     const schemaFile = this.writeSchemaFile(study.id, s.artifactKey, jsonSchema);
@@ -515,7 +613,8 @@ export class Orchestrator {
 
   private async employeeTurn(
     study: StudyRow,
-    s: StepSpec<z.ZodType, unknown>,
+    // 턴 실행에 필요한 것만 받는다(산출물 타입과 무관하게)
+    s: Pick<StepSpec<z.ZodType, unknown>, "employee" | "stepKey" | "kind" | "webSearch" | "messenger">,
     prompt: string,
     outputSchema: object,
     outputSchemaFile: string,

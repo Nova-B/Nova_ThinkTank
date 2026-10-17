@@ -34,6 +34,10 @@ function nameOf(key: string, roster: Employee[]): string {
       return "레드팀의 출처 평가";
     case "redteam-critique":
       return "레드팀의 반론";
+    case "rebuttal":
+      return `${label}의 재반박`;
+    case "counter":
+      return "레드팀의 마지막 답";
     case "report-draft":
       return "편집장의 보고서 초안";
     default:
@@ -172,6 +176,54 @@ function View({ k, value, roster }: { k: string; value: unknown; roster: Employe
             <li key={i}>{x}</li>
           ))}
         </ul>
+      </div>
+    );
+  }
+  if (k.startsWith("rebuttal:")) {
+    const r = v as { responses: { challengeNo: number; stance: string; argument: string; evidence: { title: string; url: string }[]; revisedClaim: string | null }[] };
+    const stance: Record<string, string> = { accept: "수용", partial: "부분 수용", reject: "거부" };
+    return (
+      <div className="art">
+        <ol className="challenges">
+          {r.responses.map((x) => (
+            <li key={x.challengeNo} className={x.stance === "reject" ? "sev-high" : undefined}>
+              <p>
+                <b>반론 {x.challengeNo}번에 {stance[x.stance] ?? x.stance}</b>
+              </p>
+              <p>{x.argument}</p>
+              {x.revisedClaim ? <p className="reason">고친 주장: {x.revisedClaim}</p> : null}
+              {x.evidence.length ? (
+                <ul className="sources">
+                  {x.evidence.map((e, i) => (
+                    <li key={i}>
+                      <SafeLink url={e.url}>{e.title}</SafeLink>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      </div>
+    );
+  }
+  if (k === "counter") {
+    const c = v as { replies: { challengeNo: number; verdict: string; argument: string }[] };
+    if (!c.replies.length) {
+      return <p className="empty">2라운드 조건(심각도 high, 결론을 바꿀 수 있음, 리서처가 받아들이지 않음)에 맞는 반론이 없어 열리지 않았습니다.</p>;
+    }
+    return (
+      <div className="art">
+        <ol className="challenges">
+          {c.replies.map((x) => (
+            <li key={x.challengeNo}>
+              <p>
+                <b>반론 {x.challengeNo}번: {x.verdict === "concede" ? "재반박 인정" : "반론 유지"}</b>
+              </p>
+              <p>{x.argument}</p>
+            </li>
+          ))}
+        </ol>
       </div>
     );
   }

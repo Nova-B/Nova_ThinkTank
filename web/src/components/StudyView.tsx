@@ -26,7 +26,7 @@ function settle(state: OfficeState, running: boolean, completed: boolean): Offic
   const employees = Object.fromEntries(
     Object.entries(state.employees).map(([k, e]) => [k, e.status === "working" ? { ...e, status: "idle" as const, activity: null } : e]),
   );
-  return { ...state, employees, stage: completed ? "done" : state.stage };
+  return { ...state, employees, stage: completed ? "done" : state.stage, prevStage: completed ? null : state.prevStage };
 }
 
 type Tab = "artifacts" | "report" | "reflection";

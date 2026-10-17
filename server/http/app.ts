@@ -33,7 +33,7 @@ export interface AppDeps {
 
 const MAX_BODY = 64 * 1024;
 const EVENT_PAGE = 2000;
-const STAGES = ["frame", "research", "asks", "revise", "redteam", "edit", "render", "done"];
+const STAGES = ["frame", "research", "asks", "revise", "redteam", "rebuttal", "edit", "render", "done"];
 
 class HttpError extends Error {
   constructor(

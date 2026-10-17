@@ -1,5 +1,5 @@
 import type { Employee } from "./roster.js";
-import type { Brief, Claim, Critique, SourceReview } from "./schemas.js";
+import type { Brief, Claim, Counter, Critique, Rebuttal, SourceReview } from "./schemas.js";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -22,7 +22,7 @@ const ROLE: Record<Employee["role"], string> = {
   editor: `너는 편집장이다. 리서치와 레드팀 반론을 묶어 보고서를 쓴다.
 - 결론을 하나로 매끈하게 정리하지 않는다. 합의된 것, 이견, 미해결 질문을 나눠 쓴다.
 - 모든 발견과 행동 제안에 근거가 된 주장 ID를 단다. 목록에 없는 주장을 만들어 내지 않는다.
-- 레드팀의 심각도 high 반론에는 반드시 받아들일지 말지와 이유를 쓴다.`,
+- 레드팀 반론마다, 리서처의 재반박과 레드팀의 마지막 답까지 보고 판정한다(upheld / overturned / unresolved).`,
 };
 
 export function instructionsFor(employee: Employee): string {
@@ -142,6 +142,63 @@ ${list}
 - 빠진 관점(missingPerspectives)을 쓴다.`;
 }
 
+// 재반박 규칙. 모델은 반박을 받으면 맞는 답도 쉽게 내려놓는다(아첨, Sharma et al. 2023).
+// 그래서 "동의가 기본값이 아니다"와 "입장을 바꾸려면 바꾸게 만든 근거를 대라"를 명시한다.
+const NO_SYCOPHANCY = `- 반론에 동의하는 것이 기본값이 아니다. 반론이 맞으면 수용하고, 틀렸으면 근거를 들어 거부한다.
+- "다시 생각해 보니 맞다"만으로 입장을 바꾸지 않는다. 입장을 바꾼다면 무엇이 바꾸게 했는지(근거)를 쓴다.
+- 확인하지 못한 것은 확인하지 못했다고 쓴다.`;
+
+function challengeLine(c: Critique["challenges"][number], no: number): string {
+  return `${no}. [${c.severity}] (${c.type}, 대상 ${c.claimIds.join(", ") || "전체"}) ${c.argument}${c.wouldChangeConclusion ? " — 결론을 바꿀 수 있음" : ""}`;
+}
+
+export function rebuttalPrompt(mine: Claim[], all: Claim[], critique: Critique, assigned: number[]): string {
+  const mineIds = new Set(mine.map((c) => c.id));
+  // 두 리서처의 주장을 함께 겨냥한 반론이면, 동료 주장도 보여 줘야 둘 사이의 모순을 검토할 수 있다
+  const others = all.filter(
+    (c) => !mineIds.has(c.id) && assigned.some((no) => critique.challenges[no - 1]?.claimIds.includes(c.id)),
+  );
+  const claims = mine
+    .map((c) => {
+      const src = c.sources.map((s) => `    - ${s.title} <${s.url}>${s.quote ? ` "${s.quote}"` : ""}`).join("\n");
+      return `- [${c.id}] (${c.kind}, 확신 ${c.confidence}) ${c.statement}${src ? `\n${src}` : ""}`;
+    })
+    .join("\n");
+  const list = assigned.map((no) => challengeLine(critique.challenges[no - 1]!, no)).join("\n");
+  return `레드팀이 네 주장에 반론을 냈다. 반론마다 재반박을 쓴다.
+
+${NO_SYCOPHANCY}
+- 필요하면 웹 검색으로 근거를 다시 확인한다.
+- stance: accept(반론이 맞다) / partial(일부만 맞다) / reject(반론이 틀렸다). reject에는 출처가 하나 이상 있어야 한다.
+- 주장을 고치게 되면 revisedClaim에 고친 문장을 쓴다.
+
+네 주장과 출처:
+${claims}
+
+${others.length ? `반론이 함께 겨냥한 동료의 주장(참고, 네가 답할 대상은 아니다):\n${others.map((c) => `- [${c.id}] (${c.author}) ${c.statement}`).join("\n")}\n\n` : ""}네가 답할 반론 (번호 = challengeNo, "대상 전체"는 연구 전체를 겨냥한 반론):
+${list}`;
+}
+
+export function counterPrompt(critique: Critique, eligible: number[], rebuttals: { who: string; rebuttal: Rebuttal }[]): string {
+  const blocks = eligible
+    .map((no) => {
+      const answers = rebuttals
+        .flatMap(({ who, rebuttal }) => rebuttal.responses.filter((r) => r.challengeNo === no).map((r) => ({ who, r })))
+        .map(({ who, r }) => `   - ${who}: ${STANCE[r.stance]} — ${r.argument}${r.evidence.length ? `\n     근거: ${r.evidence.map((e) => `${e.title} <${e.url}>`).join("; ")}` : ""}`)
+        .join("\n");
+      return `${challengeLine(critique.challenges[no - 1]!, no)}\n${answers}`;
+    })
+    .join("\n\n");
+  return `네 핵심 반론 가운데 리서처가 받아들이지 않은 것들이다. 각 반론에 마지막으로 답한다. 이번이 마지막 발언이다.
+
+${NO_SYCOPHANCY.replaceAll("반론에 동의", "재반박에 동의")}
+- verdict: concede(리서처의 재반박이 맞다) / maintain(반론을 유지한다).
+
+${blocks}`;
+}
+
+const STANCE = { accept: "수용", partial: "부분 수용", reject: "거부" } as const;
+
 export function editPrompt(input: {
   question: string;
   hypothesis: string | null;
@@ -150,12 +207,34 @@ export function editPrompt(input: {
   openQuestions: string[];
   review: SourceReview;
   critique: Critique;
+  rebuttals: { who: string; rebuttal: Rebuttal }[];
+  counter: Counter;
 }): string {
   const claims = input.claims
     .map((c) => `- [${c.id}] (${c.author}, ${c.kind}, 확신 ${c.confidence}) ${c.statement}`)
     .join("\n");
+  // 반론마다 재반박과 마지막 답을 한데 모아 보여 준다
   const challenges = input.critique.challenges
-    .map((c, i) => `${i + 1}. [${c.severity}] (${c.type}, 대상 ${c.claimIds.join(", ") || "전체"}) ${c.argument}${c.wouldChangeConclusion ? " — 결론을 바꿀 수 있음" : ""}`)
+    .map((c, i) => {
+      const no = i + 1;
+      const answers = input.rebuttals
+        .flatMap(({ who, rebuttal }) => rebuttal.responses.filter((r) => r.challengeNo === no).map((r) => ({ who, r })))
+        .map(({ who, r }) =>
+          [
+            `   - 재반박 ${who}: ${STANCE[r.stance]} — ${r.argument}`,
+            ...(r.evidence.length ? r.evidence.map((e) => `     근거: ${e.title} <${e.url}>${e.quote ? ` "${e.quote}"` : ""}`) : ["     근거: 없음"]),
+            ...(r.revisedClaim ? [`     고친 주장: ${r.revisedClaim}`] : []),
+          ].join("\n"),
+        );
+      const last = input.counter.replies.find((r) => r.challengeNo === no);
+      const counter = last
+        ? [
+            `   - 레드팀 마지막 답: ${last.verdict === "concede" ? "재반박 인정" : "반론 유지"} — ${last.argument}`,
+            ...last.evidence.map((e) => `     근거: ${e.title} <${e.url}>${e.quote ? ` "${e.quote}"` : ""}`),
+          ]
+        : [];
+      return [challengeLine(c, no), ...(answers.length ? answers : ["   - (재반박 없음)"]), ...counter].join("\n");
+    })
     .join("\n");
   const unreliable = input.review.sources
     .filter((s) => s.reliability === "low" || s.reliability === "unverifiable")
@@ -174,7 +253,7 @@ ${input.openQuestions.map((q) => `- ${q}`).join("\n") || "- 없음"}
 레드팀이 신뢰도 낮음·확인 불가로 본 출처:
 ${unreliable || "- 없음"}
 
-레드팀 반론 (번호 = challengeNo):
+레드팀 반론과 재반박 (번호 = challengeNo):
 ${challenges}
 
 레드팀이 본 "결론이 틀리는 조건":
@@ -183,7 +262,13 @@ ${input.critique.conditionsWhereWrong.map((c) => `- ${c}`).join("\n")}
 보고서를 쓴다:
 - findings: 핵심 발견. 본문에 근거 주장 ID를 claimIds로 단다.
 - disagreements: 리서처끼리, 또는 리서처와 레드팀이 갈린 지점.
-- redteamResponses: 반론마다(최소 high 전부) 받아들였는지와 응답.
+- redteamResponses: 모든 반론에 판정한다.
+  - upheld: 반론이 맞다 / overturned: 리서처의 재반박이 맞다 / unresolved: 근거가 맞서거나 어느 쪽도 확인할 수 없다.
+  - 판정 기준은 근거의 질이다. 누가 마지막에 말했는지, 누가 더 길게 말했는지가 아니다.
+  - 모든 반론을 upheld로 두는 것이 기본값이 아니다. 근거가 맞서면 unresolved가 정당한 판정이다.
+  - 근거 없이 입장을 바꾼 쪽의 말은 가볍게 본다.
+  - unresolved면 resolveBy에 무엇이 확인되면 풀리는지 쓴다. 다른 판정이면 resolveBy는 null.
+- 리서처가 주장을 고쳤으면(고친 주장) findings·actions에는 고친 주장을 바탕으로 쓴다. 반론이 유지된 주장을 결론의 근거로 쓰지 않는다.
 - actions: 행동 제안. scope는 macro(사회·산업·국가) 또는 personal(개인). 근거 주장 ID를 단다.
 - openQuestions: 이 보고서로 답하지 못한 질문.`;
 }

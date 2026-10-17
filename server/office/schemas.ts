@@ -79,6 +79,39 @@ export const CritiqueSchema = z.strictObject({
 });
 export type Critique = z.infer<typeof CritiqueSchema>;
 
+const EvidenceSchema = z.strictObject({
+  title: z.string(),
+  url: z.string(),
+  quote: z.string().nullable().describe("근거 구절(원문 그대로, 짧게). 없으면 null"),
+});
+
+/** 리서처의 재반박. 반론마다 수용/부분 수용/거부 중 하나와 그 근거 */
+export const RebuttalSchema = z.strictObject({
+  responses: z.array(
+    z.strictObject({
+      challengeNo: z.number(),
+      stance: z.enum(["accept", "partial", "reject"]).describe("accept=반론이 맞다, partial=일부만 맞다, reject=반론이 틀렸다"),
+      argument: z.string().describe("왜 그렇게 판단했는지. 입장을 바꾸면 바꾸게 만든 근거를 쓴다"),
+      evidence: z.array(EvidenceSchema).describe("판단의 근거 출처. reject면 1개 이상 필수"),
+      revisedClaim: z.string().nullable().describe("수용·부분 수용으로 주장을 고치면 고친 문장. 아니면 null"),
+    }),
+  ),
+});
+export type Rebuttal = z.infer<typeof RebuttalSchema>;
+
+/** 조건부 2라운드: 리서처가 버틴 핵심 반론에 대한 레드팀의 마지막 답 */
+export const CounterSchema = z.strictObject({
+  replies: z.array(
+    z.strictObject({
+      challengeNo: z.number(),
+      verdict: z.enum(["concede", "maintain"]).describe("concede=리서처의 재반박이 맞다, maintain=반론을 유지한다"),
+      argument: z.string(),
+      evidence: z.array(EvidenceSchema),
+    }),
+  ),
+});
+export type Counter = z.infer<typeof CounterSchema>;
+
 export const ReportDraftSchema = z.strictObject({
   title: z.string(),
   findings: z.array(z.strictObject({ heading: z.string(), body: z.string(), claimIds: z.array(z.string()) })),
@@ -91,7 +124,17 @@ export const ReportDraftSchema = z.strictObject({
   ),
   redteamResponses: z.array(
     // int()는 OpenAI strict 모드가 받지 않는 minimum/maximum을 만든다 → 정수 여부는 서버 검증에서 본다
-    z.strictObject({ challengeNo: z.number(), accepted: z.boolean(), response: z.string() }),
+    z.strictObject({
+      challengeNo: z.number(),
+      verdict: z
+        .enum(["upheld", "overturned", "unresolved"])
+        .describe("upheld=반론이 맞다, overturned=리서처의 재반박이 맞다, unresolved=근거가 맞서거나 확인할 수 없다"),
+      response: z.string().describe("판정 이유. 어느 쪽 근거가 왜 더 나은지"),
+      resolveBy: z
+        .string()
+        .nullable()
+        .describe("unresolved일 때: 무엇이 확인되면 풀리는지(필요한 자료·조건). 다른 판정이면 null"),
+    }),
   ),
   actions: z.array(
     z.strictObject({
@@ -163,6 +206,39 @@ export function validateCritique(critique: Critique, claimIds: string[]): string
   return errors;
 }
 
+const isUrl = (u: string) => /^https?:\/\//.test(u);
+
+/** 맡은 반론마다 정확히 한 번 답했는지, 거부에는 출처가 있는지 */
+export function validateRebuttal(rebuttal: Rebuttal, assigned: number[]): string[] {
+  const errors: string[] = [];
+  const seen = rebuttal.responses.map((r) => r.challengeNo);
+  for (const no of assigned) if (!seen.includes(no)) errors.push(`반론 ${no}번에 답하지 않았다`);
+  for (const no of seen) if (!assigned.includes(no)) errors.push(`맡지 않은 반론 번호: ${no}`);
+  if (new Set(seen).size !== seen.length) errors.push("같은 반론에 두 번 답했다");
+  rebuttal.responses.forEach((r) => {
+    if (!r.argument.trim()) errors.push(`반론 ${r.challengeNo}번: 이유(argument)가 비어 있다`);
+    if (r.stance === "reject" && !r.evidence.some((e) => isUrl(e.url))) {
+      errors.push(`반론 ${r.challengeNo}번: 거부하려면 출처(URL)가 하나 이상 필요하다`);
+    }
+    if (r.stance === "partial" && !r.revisedClaim && !r.evidence.length) {
+      errors.push(`반론 ${r.challengeNo}번: 부분 수용이면 고친 주장이나 근거가 필요하다`);
+    }
+  });
+  return errors;
+}
+
+export function validateCounter(counter: Counter, eligible: number[]): string[] {
+  const errors: string[] = [];
+  const seen = counter.replies.map((r) => r.challengeNo);
+  for (const no of eligible) if (!seen.includes(no)) errors.push(`반론 ${no}번에 답하지 않았다`);
+  for (const no of seen) if (!eligible.includes(no)) errors.push(`이번 라운드 대상이 아닌 반론: ${no}`);
+  if (new Set(seen).size !== seen.length) errors.push("같은 반론에 두 번 답했다");
+  counter.replies.forEach((r) => {
+    if (!r.argument.trim()) errors.push(`반론 ${r.challengeNo}번: 이유가 비어 있다`);
+  });
+  return errors;
+}
+
 export function validateReport(report: ReportDraft, claimIds: string[], critique: Critique): string[] {
   const errors: string[] = [];
   const refs = [...report.findings.flatMap((f) => f.claimIds), ...report.actions.flatMap((a) => a.claimIds)];
@@ -176,10 +252,16 @@ export function validateReport(report: ReportDraft, claimIds: string[], critique
   if (report.findings.length === 0) errors.push("핵심 발견이 없다");
   if (report.actions.length === 0) errors.push("행동 제안이 없다");
   if (report.openQuestions.length === 0) errors.push("미해결 질문이 없다");
+  // 재반박을 거친 뒤라 모든 반론에 판정이 있어야 한다(심각도와 상관없이)
   const answered = new Set(report.redteamResponses.map((r) => r.challengeNo));
-  critique.challenges.forEach((c, i) => {
-    if (c.severity === "high" && !answered.has(i + 1)) errors.push(`심각도 high인 반론 ${i + 1}번에 응답이 없다`);
+  critique.challenges.forEach((_c, i) => {
+    if (!answered.has(i + 1)) errors.push(`반론 ${i + 1}번에 판정이 없다`);
   });
+  if (answered.size !== report.redteamResponses.length) errors.push("같은 반론에 판정이 두 번 있다");
+  // 미해결은 판단 회피로 쓰이기 쉽다 → 무엇이 확인되면 풀리는지 적게 한다
+  for (const r of report.redteamResponses) {
+    if (r.verdict === "unresolved" && !r.resolveBy?.trim()) errors.push(`반론 ${r.challengeNo}번: 미해결이면 무엇이 확인되면 풀리는지(resolveBy)를 써야 한다`);
+  }
   for (const r of report.redteamResponses) {
     if (!Number.isInteger(r.challengeNo) || r.challengeNo < 1 || r.challengeNo > critique.challenges.length) {
       errors.push(`없는 반론 번호: ${r.challengeNo}`);

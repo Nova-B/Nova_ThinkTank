@@ -44,7 +44,7 @@ const OUT: Record<string, unknown> = {
     title: "보고서",
     findings: [{ heading: "발견", body: "본문 <script>x</script>", claimIds: ["A1"] }],
     disagreements: [],
-    redteamResponses: [{ challengeNo: 1, accepted: false, response: "근거 부족" }],
+    redteamResponses: [{ challengeNo: 1, verdict: "overturned", response: "재반박 근거가 낫다", resolveBy: null }],
     actions: [{ scope: "personal", action: "행동", rationale: "이유", horizon: "now", claimIds: ["B1"] }],
     openQuestions: ["남은 질문"],
   },
@@ -55,7 +55,9 @@ const fake: TurnRunner = async (spec, run) => {
   run.onEvent({ kind: "session", sessionId: spec.resumeSessionId ?? spec.newSessionId ?? `t-${Math.random()}` });
   run.onEvent({ kind: "tool_call", tool: "WebSearch", detail: "검색어" });
   const p = spec.prompt;
-  const output = p.includes("리서처 명단:")
+  const output = p.includes("레드팀이 네 주장에 반론을 냈다")
+    ? { responses: [{ challengeNo: 1, stance: "partial", argument: "일부만 맞다", evidence: [], revisedClaim: "고침" }] }
+    : p.includes("리서처 명단:")
     ? OUT.frame
     : p.includes("너의 관점:")
       ? (OUT.research as (q: string) => unknown)(spec.cwd.includes("researcher-a") ? "Q1" : "Q2")

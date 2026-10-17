@@ -1,11 +1,41 @@
 import type { StudyRow } from "../store/store.js";
 import type { Employee } from "./roster.js";
-import type { Brief, Claim, Critique, ReportDraft, SourceReview } from "./schemas.js";
+import type { Brief, Claim, Counter, Critique, Rebuttal, ReportDraft, SourceReview } from "./schemas.js";
 
 const SCOPE = { macro: "거시 (사회·산업·국가)", personal: "개인" } as const;
 const HORIZON = { now: "지금", "1-3y": "1~3년", "3-10y": "3~10년" } as const;
 const STATUS = { unresolved: "미해결", partially_resolved: "일부 해소", resolved: "해소" } as const;
 const RELIABILITY = { high: "높음", medium: "보통", low: "낮음", unverifiable: "확인 불가" } as const;
+const STANCE = { accept: "수용", partial: "부분 수용", reject: "거부" } as const;
+const VERDICT = {
+  upheld: "반론 유지",
+  overturned: "재반박 인정",
+  unresolved: "미해결",
+  // M1a(재반박 단계 전): 편집장이 반론을 받아들이지 않았다. 재반박이 있었던 것은 아니다
+  declined: "반론 미수용(재반박 단계 전)",
+} as const;
+
+type Verdict = keyof typeof VERDICT;
+
+/** 판정. M1a 보고서는 accepted: boolean으로 저장돼 있어 그때의 뜻대로 옮긴다 */
+export function verdictOf(r: { verdict?: Verdict; accepted?: boolean }): Verdict {
+  if (r.verdict) return r.verdict;
+  if (r.accepted === true) return "upheld";
+  if (r.accepted === false) return "declined";
+  return "unresolved";
+}
+
+/**
+ * 반론을 거의 다 유지했다면 반론이 다 옳았다는 뜻일 수도, 편집장이 반론 쪽으로 기우는 성향(아첨)일 수도 있다.
+ * 둘을 구별할 수 없으니 읽는 사람에게 알린다. 반론이 적으면 우연일 수 있어 5개 이상일 때만.
+ */
+export function verdictSummary(draft: ReportDraft, total: number) {
+  const counts = { upheld: 0, overturned: 0, unresolved: 0, declined: 0 };
+  for (const r of draft.redteamResponses) counts[verdictOf(r as never)]++;
+  const decided = counts.upheld + counts.overturned + counts.unresolved + counts.declined;
+  const warn = total >= 5 && decided > 0 && counts.upheld / decided >= 0.9;
+  return { counts, decided, warn };
+}
 
 function yamlString(s: string): string {
   return JSON.stringify(s);
@@ -33,8 +63,13 @@ export function renderReport(input: {
   draft: ReportDraft;
   /** 리서처가 남긴 미해결 질문 원문. 편집장이 고르지 않아도 서버가 보존한다 */
   researcherQuestions: { who: string; question: string }[];
+  /** 재반박(M1b). 그 전 보고서에는 없다 */
+  rebuttals?: { who: string; rebuttal: Rebuttal }[];
+  counter?: Counter | null;
 }): string {
   const { study, roster, brief, claims, review, critique, draft, researcherQuestions } = input;
+  const rebuttals = input.rebuttals ?? [];
+  const counter = input.counter ?? null;
   const date = study.created_at.slice(0, 10);
   const reliability = new Map(review.sources.map((s) => [s.url, s]));
   const staff = roster.map((e) => `${e.label}(${e.engine})`).join(", ");
@@ -86,13 +121,54 @@ export function renderReport(input: {
     push("");
   }
 
-  push("## 레드팀 반론과 편집장의 응답", "");
-  critique.challenges.forEach((c, i) => {
-    const r = draft.redteamResponses.find((x) => x.challengeNo === i + 1);
+  const summary = verdictSummary(draft, critique.challenges.length);
+  push(rebuttals.length ? "## 레드팀 반론, 재반박, 판정" : "## 레드팀 반론과 편집장의 응답", "");
+  const legacy = summary.counts.declined ? ` · 반론 미수용(재반박 단계 전) ${summary.counts.declined}` : "";
+  push(
+    `편집장 판정: 반론 유지 ${summary.counts.upheld} · 재반박 인정 ${summary.counts.overturned} · 미해결 ${summary.counts.unresolved}${legacy} (반론 ${critique.challenges.length}개)`,
+    "",
+  );
+  if (rebuttals.length) {
+    // 토론이 실제로 어떻게 흘렀는지. 연구끼리 비교하려고 남긴다
+    const stances = { accept: 0, partial: 0, reject: 0 };
+    let revised = 0;
+    for (const { rebuttal } of rebuttals) {
+      for (const x of rebuttal.responses) {
+        stances[x.stance]++;
+        if (x.revisedClaim) revised++;
+      }
+    }
+    const concede = counter?.replies.filter((x) => x.verdict === "concede").length ?? 0;
+    const maintain = counter?.replies.filter((x) => x.verdict === "maintain").length ?? 0;
     push(
-      `${i + 1}. **[${c.severity}] ${c.type}**${refs(c.claimIds)} — ${c.argument}${c.wouldChangeConclusion ? " _(결론을 바꿀 수 있음)_" : ""}`,
-      `   - 응답: ${r ? `${r.accepted ? "✅ 받아들임" : "❌ 받아들이지 않음"} — ${r.response}` : "_(응답 없음)_"}`,
+      `토론 지표: 재반박 수용 ${stances.accept} · 부분 수용 ${stances.partial} · 거부 ${stances.reject}, 고친 주장 ${revised}개, ` +
+        `2라운드 ${concede + maintain}건(레드팀 인정 ${concede} · 유지 ${maintain})`,
+      "",
     );
+  }
+  if (summary.warn) {
+    push(
+      `> ⚠️ 편집장이 반론을 거의 모두(${summary.counts.upheld}/${summary.decided}) 유지했습니다. 반론이 정말 다 옳았을 수도 있지만,`,
+      "> AI는 반박을 받으면 쉽게 따라가는 경향이 있습니다. 아래 재반박의 근거를 직접 확인해 보세요.",
+      "",
+    );
+  }
+  critique.challenges.forEach((c, i) => {
+    const no = i + 1;
+    const r = draft.redteamResponses.find((x) => x.challengeNo === no);
+    push(`${no}. **[${c.severity}] ${c.type}**${refs(c.claimIds)} — ${c.argument}${c.wouldChangeConclusion ? " _(결론을 바꿀 수 있음)_" : ""}`);
+    for (const { who, rebuttal } of rebuttals) {
+      for (const x of rebuttal.responses.filter((y) => y.challengeNo === no)) {
+        const ev = x.evidence.map((e) => `[${e.title}](${e.url})`).join(", ");
+        push(`   - 재반박 (${who}, **${STANCE[x.stance]}**): ${x.argument}${ev ? ` — 근거: ${ev}` : ""}`);
+        if (x.revisedClaim) push(`     - 고친 주장: ${x.revisedClaim}`);
+      }
+    }
+    const last = counter?.replies.find((y) => y.challengeNo === no);
+    if (last) push(`   - 레드팀 마지막 답 (**${last.verdict === "concede" ? "재반박 인정" : "반론 유지"}**): ${last.argument}`);
+    push(`   - 판정: ${r ? `**${VERDICT[verdictOf(r as never)]}** — ${r.response}` : "_(판정 없음)_"}`);
+    const resolveBy = (r as { resolveBy?: string | null } | undefined)?.resolveBy;
+    if (resolveBy) push(`     - 풀리려면: ${resolveBy}`);
   });
   push("", "**이 연구의 결론이 틀리게 되는 조건 (레드팀)**", "", ...critique.conditionsWhereWrong.map((c) => `- ${c}`), "");
   if (critique.missingPerspectives.length) {

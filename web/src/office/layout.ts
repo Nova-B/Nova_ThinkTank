@@ -27,7 +27,25 @@ export const ROOMS: Room[] = [
   { name: "편집실", x: 590, y: 320, w: 390, h: 280, tone: "ink", doors: [{ x: 590, y: 470, wall: "left" }] },
 ];
 
-export const WHITEBOARD: Rect = { x: 268, y: 40, w: 274, h: 64 };
+export const WHITEBOARD: Rect = { x: 256, y: 40, w: 298, h: 64 };
+
+/** 연구실의 회의 테이블. 재반박 단계에서 리서처와 레드팀이 여기 모인다 */
+export const MEETING_TABLE: Rect = { x: 215, y: 500, w: 160, h: 44 };
+export const MEETING_STAGES = new Set(["rebuttal"]);
+const MEETING_SEATS = [
+  { x: 180, y: 522 },
+  { x: 410, y: 522 },
+  // 위쪽 자리는 이름표가 테이블 글자와 겹치지 않게 충분히 띄운다
+  { x: 295, y: 445 },
+  { x: 375, y: 445 },
+];
+
+/** 회의 참석자(리서처·레드팀)의 회의 자리. 참석자가 아니면 null */
+export function meetingSeat(employee: Employee, roster: Employee[]): { x: number; y: number } | null {
+  const attendees = roster.filter((e) => e.role === "researcher" || e.role === "redteam");
+  const i = attendees.findIndex((e) => e.id === employee.id);
+  return i >= 0 ? (MEETING_SEATS[i % MEETING_SEATS.length] ?? null) : null;
+}
 
 export interface Seat {
   employee: Employee;

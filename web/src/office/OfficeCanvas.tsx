@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { Employee } from "../types";
-import { PLAN_H, PLAN_W, ROOMS, WHITEBOARD, seatRoster, type Seat } from "./layout";
+import { MEETING_STAGES, MEETING_TABLE, PLAN_H, PLAN_W, ROOMS, WHITEBOARD, meetingSeat, seatRoster, type Seat } from "./layout";
 import type { EmployeeState, OfficeState } from "./state";
 
 // 화이트보드는 좁아서 짧은 이름을 쓴다
@@ -10,6 +10,7 @@ const BOARD_LABEL: Record<string, string> = {
   asks: "질문",
   revise: "수정",
   redteam: "레드팀",
+  rebuttal: "재반박",
   edit: "편집",
   done: "완료",
 };
@@ -33,6 +34,16 @@ interface Palette {
 }
 
 const WALK_MS = 7000;
+const GATHER_MS = 2500;
+
+function ease(t: number): number {
+  const k = Math.max(0, Math.min(1, t));
+  return k * k * (3 - 2 * k);
+}
+
+function lerp(a: { x: number; y: number }, b: { x: number; y: number }, k: number) {
+  return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+}
 const BUBBLE_MS = 25_000;
 const TOKEN_R = 22;
 
@@ -341,6 +352,18 @@ export function OfficeCanvas({ roster, state, stages, selected, onSelect }: Prop
       bctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
       drawPlan(bctx, pal);
       for (const seat of seats) drawDesk(bctx, pal, seat);
+      // 회의 테이블
+      bctx.strokeStyle = pal.ink;
+      bctx.lineWidth = 1.5;
+      bctx.beginPath();
+      bctx.roundRect(MEETING_TABLE.x, MEETING_TABLE.y, MEETING_TABLE.w, MEETING_TABLE.h, 20);
+      bctx.stroke();
+      bctx.fillStyle = pal.muted;
+      bctx.font = "400 11px 'IBM Plex Sans KR', sans-serif";
+      bctx.textAlign = "center";
+      bctx.textBaseline = "middle";
+      bctx.fillText("회의 테이블", MEETING_TABLE.x + MEETING_TABLE.w / 2, MEETING_TABLE.y + MEETING_TABLE.h / 2);
+      bctx.textAlign = "left";
     };
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -371,9 +394,18 @@ export function OfficeCanvas({ roster, state, stages, selected, onSelect }: Prop
       ctx.drawImage(backdrop, 0, 0, PLAN_W, PLAN_H);
       drawWhiteboard(ctx, pal, stages, s.stage);
       positions = new Map<string, { x: number; y: number }>();
+      // 재반박 단계: 리서처와 레드팀이 회의 테이블로 모이고, 끝나면 자리로 돌아간다
+      const inMeeting = s.stage !== null && MEETING_STAGES.has(s.stage);
+      const leaving = !inMeeting && s.prevStage !== null && MEETING_STAGES.has(s.prevStage);
+      const gather = reduced ? 1 : ease((now - s.stageAt) / GATHER_MS);
       for (const seat of seats) {
         const walk = [...s.walks].reverse().find((w) => w.from === seat.employee.id && now - w.at < WALK_MS);
-        positions.set(seat.employee.id, walk ? walkOffset(seat, bySeat.get(walk.to), now - walk.at, reduced) : { x: seat.x, y: seat.y });
+        const meet = meetingSeat(seat.employee, roster);
+        let pos = { x: seat.x, y: seat.y };
+        if (walk) pos = walkOffset(seat, bySeat.get(walk.to), now - walk.at, reduced);
+        else if (meet && inMeeting) pos = lerp(pos, meet, gather);
+        else if (meet && leaving) pos = lerp(meet, pos, gather);
+        positions.set(seat.employee.id, pos);
       }
       // 질문 중인 두 사람 사이에 점선
       for (const w of s.walks) {
@@ -420,7 +452,7 @@ export function OfficeCanvas({ roster, state, stages, selected, onSelect }: Prop
       darkQuery.removeEventListener("change", onScheme);
       canvas.removeEventListener("click", onClick);
     };
-  }, [seats, bySeat, stages, onSelect]);
+  }, [seats, bySeat, roster, stages, onSelect]);
 
   const summary = roster
     .map((e) => {

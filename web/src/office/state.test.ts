@@ -47,6 +47,15 @@ test("동료에게 질문하면 걸어가기가 생긴다", () => {
   assert.deepEqual(s.walks.map((w) => [w.from, w.to]), [["researcher-b", "researcher-a"]]);
 });
 
+test("단계가 바뀌면 직전 단계와 바뀐 시각을 기억한다 (회의 테이블 이동용)", () => {
+  let s = initialState(roster);
+  s = reduce(s, msg(null, { kind: "stage", stage: "redteam" }), 1000);
+  s = reduce(s, msg(null, { kind: "stage", stage: "rebuttal" }), 2000);
+  assert.equal(s.prevStage, "redteam");
+  assert.equal(s.stage, "rebuttal");
+  assert.equal(s.stageAt, 2000);
+});
+
 test("한도에 걸리면 waiting, 단계·한도 정보가 반영된다", () => {
   let s = initialState(roster);
   s = reduce(s, msg(null, { kind: "stage", stage: "redteam" }));
