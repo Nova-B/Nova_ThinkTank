@@ -28,7 +28,7 @@ export const api = {
     }>(`/api/studies/${id}`),
   events: (id: string, after = 0) => call<{ events: EventMessage[]; more: boolean }>(`/api/studies/${id}/events?after=${after}`),
   artifact: (id: string, key: string) => call<{ key: string; value: unknown }>(`/api/studies/${id}/artifacts/${encodeURIComponent(key)}`),
-  report: (id: string) => call<{ markdown: string; path: string }>(`/api/studies/${id}/report`),
+  report: (id: string) => call<{ markdown: string; html: string | null; path: string; htmlPath: string | null }>(`/api/studies/${id}/report`),
   pause: (id: string) => post(`/api/studies/${id}/pause`),
   resume: (id: string) => post(`/api/studies/${id}/resume`),
   reflection: (id: string, text: string) => post<{ ok: boolean; reportUpdated: boolean }>(`/api/studies/${id}/reflection`, { text }),

@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "office": "tsx server/cli/office.ts",
+    "office": "vite build web --logLevel warn && tsx server/cli/office.ts --prod",
+    "office:dev": "tsx server/cli/office.ts",
     "build:web": "vite build web",
     "study": "tsx server/cli/study.ts",
     "test": "tsx --test \"server/**/*.test.ts\" \"web/src/**/*.test.ts\"",
@@ -30,8 +31,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.31.0",
-    "dompurify": "3.4.16",
-    "marked": "18.0.14",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "4.6.5"

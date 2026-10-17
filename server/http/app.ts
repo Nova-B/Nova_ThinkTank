@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OfficeEvent, Orchestrator } from "../office/orchestrator.js";
+import { REPORT_CSP } from "../office/report-html.js";
 import type { Employee } from "../office/roster.js";
 import type { StudyRow, Store } from "../store/store.js";
 
@@ -237,10 +238,23 @@ export function createApi(deps: AppDeps) {
         if (value === undefined) throw new HttpError(404, "없는 산출물");
         return json(res, 200, { key: d, value });
       }
-      if (method === "GET" && c === "report") {
+      if (method === "GET" && (c === "report" || c === "report.html")) {
         const file = study.report_path;
         if (!file || !existsSync(file)) throw new HttpError(404, "아직 보고서가 없다");
-        return json(res, 200, { markdown: readFileSync(file, "utf8"), path: file });
+        const htmlFile = file.replace(/\.md$/, ".html");
+        const html = existsSync(htmlFile) ? readFileSync(htmlFile, "utf8") : null;
+        if (c === "report.html") {
+          if (!html) throw new HttpError(404, "HTML 보고서가 없다");
+          // 보고서 안의 글은 웹에서 온 내용을 담는다 → 외부 이미지·폼을 막고, 스크립트는 고정 스크립트(해시)만
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+            "content-security-policy": REPORT_CSP,
+          });
+          res.end(html);
+          return;
+        }
+        return json(res, 200, { markdown: readFileSync(file, "utf8"), html, path: file, htmlPath: html ? htmlFile : null });
       }
       if (method === "POST" && c === "pause") {
         await readJson(req);

@@ -151,6 +151,22 @@ test("연구소를 만들고 그 안에 연구를 맡기면 끝까지 돌고, �
   const report = await http("GET", `/api/studies/${id}/report`);
   assert.match(report.json.markdown, /송전망/);
   assert.match(report.json.path, /vault/);
+  assert.match(report.json.html, /<section id="glance"/);
+  assert.match(report.json.htmlPath, /vault.*\.html$/);
+  // 편집장 본문에 섞인 <script>는 이스케이프돼 실행되지 않는다
+  assert.ok(!report.json.html.includes("<script>x</script>"));
+  assert.ok(report.json.html.includes("&lt;script&gt;x&lt;/script&gt;"));
+  const page = await new Promise<{ status: number; csp: string | undefined; body: string }>((resolve) => {
+    request({ host: "127.0.0.1", port, path: `/api/studies/${id}/report.html` }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode!, csp: res.headers["content-security-policy"] as string | undefined, body }));
+    }).end();
+  });
+  assert.equal(page.status, 200);
+  assert.match(page.csp ?? "", /img-src 'none'/);
+  assert.match(page.body, /한눈에 보기/);
   const art = await http("GET", `/api/studies/${id}/artifacts/brief`);
   assert.equal(art.json.value.refinedQuestion, "rq");
 });

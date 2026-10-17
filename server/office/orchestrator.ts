@@ -7,6 +7,8 @@ import type { Engine, McpServerSpec, NormalizedEvent, TurnSpec } from "../runner
 import type { StudyRow, StudyStatus, Store } from "../store/store.js";
 import * as P from "./prompts.js";
 import { renderReport } from "./report.js";
+import { renderReportHtml } from "./report-html.js";
+import type { ReportInput } from "./report-model.js";
 import { byRole, researchers, type Employee } from "./roster.js";
 import {
   AskAnswerSchema,
@@ -414,7 +416,7 @@ export class Orchestrator {
       return v;
     };
     const memos = staff.map((r) => get<StoredMemo>(`memo-final:${r.id}`));
-    const markdown = renderReport({
+    const input: ReportInput = {
       study,
       roster,
       brief: get<Brief>("brief"),
@@ -428,16 +430,21 @@ export class Orchestrator {
         return rebuttal ? [{ who: r.label, rebuttal }] : [];
       }),
       counter: store.getArtifact<Counter>(studyId, "counter") ?? null,
-    });
+    };
+    // 같은 모델로 두 형식을 그린다: .md는 볼트(Obsidian)용, .html은 브라우저·앱 보고서 탭용
+    const markdown = renderReport(input);
+    const html = renderReportHtml(input);
     const dir = path.join(this.deps.dataDir, "studies", studyId);
     mkdirSync(dir, { recursive: true });
-    const reportPath = path.join(dir, "report.md");
-    writeFileSync(reportPath, markdown);
-    let finalPath = reportPath;
+    writeFileSync(path.join(dir, "report.md"), markdown);
+    writeFileSync(path.join(dir, "report.html"), html);
+    let finalPath = path.join(dir, "report.md");
     if (this.deps.exportDir) {
       mkdirSync(this.deps.exportDir, { recursive: true });
-      finalPath = path.join(this.deps.exportDir, `${study.created_at.slice(0, 10)}_${studyId}.md`);
-      writeFileSync(finalPath, markdown);
+      const base = path.join(this.deps.exportDir, `${study.created_at.slice(0, 10)}_${studyId}`);
+      writeFileSync(`${base}.md`, markdown);
+      writeFileSync(`${base}.html`, html);
+      finalPath = `${base}.md`;
     }
     store.updateStudy(studyId, { report_path: finalPath });
     return markdown;

@@ -1,36 +1,19 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 
-// 출처 링크는 새 탭에서 연다(사무실 화면을 떠나지 않게). opener로 이 창을 건드리지 못하게 막는다.
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A") {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-  }
-});
-
-/** 보고서 Markdown을 HTML로. 내용은 웹에서 가져온 글을 담고 있으므로 반드시 소독한다 */
-function toHtml(markdown: string): string {
-  const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-  const html = marked.parse(body, { async: false, gfm: true });
-  // 보고서에는 이미지·미디어·폼이 필요 없다. 원격 이미지는 열람만으로 외부에 요청을 보내므로 막는다
-  return DOMPurify.sanitize(html, {
-    ADD_ATTR: ["target"],
-    FORBID_TAGS: ["img", "picture", "source", "video", "audio", "iframe", "object", "embed", "form", "input", "button", "style", "svg", "math"],
-    FORBID_ATTR: ["style", "srcset"],
-  });
-}
-
+/**
+ * 볼트에 저장된 것과 같은 HTML 보고서를 그대로 보여 준다(형식을 한곳에서만 정하기 위해).
+ * sandbox에 allow-same-origin이 없어서, 보고서 안의 스크립트는 이 앱의 쿠키·저장소·DOM에 닿지 못한다.
+ * 스크립트는 근거 표시(A1)를 누르면 접힌 근거를 펼치는 데만 쓴다.
+ */
 export function ReportPanel({ studyId, completed, version }: { studyId: string; completed: boolean; version: string }) {
-  const [report, setReport] = useState<{ html: string; path: string } | null>(null);
+  const [report, setReport] = useState<{ html: string | null; path: string; htmlPath: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!completed) return;
     api.report(studyId).then(
-      (r) => setReport({ html: toHtml(r.markdown), path: r.path }),
+      (r) => setReport({ html: r.html, path: r.path, htmlPath: r.htmlPath }),
       (e: Error) => setError(e.message),
     );
   }, [studyId, completed, version]);
@@ -40,8 +23,27 @@ export function ReportPanel({ studyId, completed, version }: { studyId: string; 
   if (!report) return null;
   return (
     <div className="report">
-      <p className="report-path">저장 위치: {report.path}</p>
-      <article className="report-body" dangerouslySetInnerHTML={{ __html: report.html }} />
+      <p className="report-path">
+        볼트 저장 위치: {report.path}
+        {report.htmlPath ? (
+          <>
+            {" "}
+            <a href={`/api/studies/${studyId}/report.html`} target="_blank" rel="noopener noreferrer">
+              새 창에서 크게 보기
+            </a>
+          </>
+        ) : null}
+      </p>
+      {report.html ? (
+        <iframe
+          className="report-frame"
+          title="연구 보고서"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          srcDoc={report.html}
+        />
+      ) : (
+        <p className="empty">이 연구는 HTML 보고서가 없습니다. 사후 검토를 한 번 저장하면 다시 만들어집니다.</p>
+      )}
     </div>
   );
 }

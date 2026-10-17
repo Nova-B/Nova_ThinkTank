@@ -490,6 +490,17 @@ textarea {
   color: var(--muted);
   font-size: 13px;
 }
+.report-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 120px);
+  min-height: 600px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+}
+.report-path a {
+  margin-left: 8px;
+}
 .report-body {
   max-width: 74ch;
   font: 400 16px/1.8 var(--serif);

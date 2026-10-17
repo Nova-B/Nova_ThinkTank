@@ -164,12 +164,15 @@ test("전체 흐름: 소장 → 리서치 → 레드팀 2단계 → 편집 → �
   assert.match(edit.spec.prompt, /근거: IEA <https:\/\/example.com\/iea> "구절"/, "편집장은 근거 원문을 본다");
 
   const report = readFileSync(result.report_path!, "utf8");
-  for (const h of ["## 🪞 Nova의 가설", "## 핵심 발견", "## 이견", "## 레드팀 반론, 재반박, 판정", "## 행동 제안", "## ❓ 미해결 질문", "## 근거 목록", "## 🪞 사후 검토"]) {
+  for (const h of ["## 🪞 내 예상", "## 한눈에 보기", "## 핵심 발견", "## 행동 제안", "## 이견과 미해결 질문", "## 검증 기록", "## 부록", "## 🪞 사후 검토"]) {
     assert.ok(report.includes(h), h);
   }
   assert.ok(report.includes("checked: false"));
   assert.ok(report.includes("연구 전에 적지 않음"));
-  assert.ok(report.includes("| A1 |") && report.includes("| B1 |"));
+  assert.ok(report.includes("> **A1**") && report.includes("> **B1**"), "근거 목록");
+  assert.ok(report.indexOf("## 한눈에 보기") < report.indexOf("## 핵심 발견"), "한눈에 보기가 먼저");
+  assert.ok(report.indexOf("## 행동 제안") < report.indexOf("## 검증 기록"), "행동 제안이 검증 기록보다 먼저");
+  assert.ok(existsSync(result.report_path!.replace(/.md$/, ".html")), "HTML도 함께 저장");
   assert.ok(report.includes("낮음"), "레드팀 신뢰도 표시");
 
   // 레드팀은 같은 세션에서 1단계 → 2단계로 이어 간다

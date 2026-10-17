@@ -20,6 +20,13 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   // 스트림 연결은 계속 열려 있어 networkidle을 기다릴 수 없다 → 그림이 그려질 시간만 준다
   await page.waitForTimeout(2500);
+  // --tab <이름>: 연구 화면 아래 탭을 눌러 그 패널을 보이게 한 뒤 찍는다
+  const tab = flags.indexOf("--tab");
+  if (tab >= 0 && flags[tab + 1]) {
+    await page.getByRole("tab", { name: flags[tab + 1] }).click();
+    await page.waitForTimeout(1500);
+    await page.locator("[role=tabpanel]").scrollIntoViewIfNeeded();
+  }
   await page.screenshot({ path: out, fullPage: !flags.includes("--viewport") });
   if (errors.length) console.log("브라우저 오류:\n" + errors.join("\n"));
   console.log(`저장: ${out}`);
